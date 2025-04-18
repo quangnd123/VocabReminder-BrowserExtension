@@ -1,0 +1,46 @@
+@keyframes pulse {
+    0% {
+        background-color: rgba(173, 216, 230, 0.2); /* Light blue at 40% opacity */
+    }
+    50% {
+        background-color: rgba(173, 216, 230, 0.6); /* Light blue at 60% opacity */
+    }
+    100% {
+        background-color: rgba(173, 216, 230, 0.2); /* Light blue at 40% opacity */
+    }
+}
+
+/* Highlighted text */
+.vocab-reminder-highlight {
+    position: absolute;
+    visibility: visible;
+    background-color: rgba(173, 216, 230, 0.2); /* Semi-transparent yellow */
+    animation: pulse 1.5s infinite; /* Gentle pulse to draw attention */
+    border-radius: 3px;
+}
+
+
+/* Popover container */
+.vocab-reminder-popover {
+    position: absolute;
+    visibility: hidden;
+    background: #fff9c4;
+    z-index: 9999;
+    color: #333; /* Dark gray for readability */
+    border: 1px solid black;
+    border-radius: 5px;
+    padding: 8px 12px;
+    max-width: 250px;
+    font-size: 14px;
+    font-family: "Georgia", serif; /* Academic style */
+    white-space: normal;
+    box-shadow: 0px 4px 12px rgba(0, 0, 0, 0.15);
+    opacity: 0;
+    transition: opacity 0.15s ease-in-out, visibility 0s 0.15s;
+}
+/* Show popover when class is added */
+.vocab-reminder-popover.show {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 0.15s ease-in-out, visibility 0s 0s;
+}
