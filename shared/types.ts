@@ -1,40 +1,69 @@
-export interface PhraseData {
-  phrase: string;
-  phraseIdx: number;
-  sentence: string;
-}
-
-// ----------------- Request Models -----------------
-
-export interface CreatePhraseRequest extends PhraseData {}
-
-export interface RemindersTextRequest {
-  sentences: string[]; // Mapping node_id to sentences
-}
-
-// ----------------- Response Models -----------------
-
 type BaseResponse<T> = {
   status: "success" | "error";
   error?: string;
   data?: T;
 };
 
-export type CreatePhraseResponse = BaseResponse<null>; // No data needed
-
-export type GetPhrasesResponse = BaseResponse<PhraseData[]>;
-
-export interface ReminderSentenceData {
-  word: string;
-  wordIdx: number;
-  relatedPhrase: string;
-  relatedPhraseSentence: string;
-  reminder: string;
-}
-
-export interface RemindersSentenceData{
+//----------------- PHRASE-----------------
+export type PhraseData = {
+  id: string
+  phrase: string
+  phrase_idx: number
   sentence: string
-  remindersData: ReminderSentenceData[]
+  language: string
 }
 
-export type RemindersTextResponse = BaseResponse<RemindersSentenceData[]>;
+export type CreatePhraseRequest = {
+  user_id: string
+  phrase: string
+  phrase_idx: number
+  sentence: string
+  language?: string
+}
+
+export type CreatePhraseResponse = BaseResponse<PhraseData>
+
+
+//----------------- Reminders Text -----------------
+
+export type RemindersTextRequest = {
+  user_id: string;
+  reading_languages: string[];
+  reminding_language: string;
+  learning_languages: string[];
+  free_llm: string;
+  sentences: string[];
+};
+
+
+export type RemindersTextResponseSentenceData = {
+  word: string;
+  word_idx: number;
+  related_phrase: string;
+  related_phrase_sentence: string;
+  reminder: string;
+};
+
+
+export type RemindersTextResponseData = {
+  sentence: string;
+  reminders_data: RemindersTextResponseSentenceData[];
+};
+
+
+export type RemindersTextResponse = BaseResponse<RemindersTextResponseData[]>;
+
+
+//----------------- Auth -----------------
+export type User = {
+  id: string;
+  name: string | null;
+  email: string | null;
+  reading_languages: string[];
+  learning_languages: string[];
+  reminding_language: string | null;
+  free_llm: string | null;
+  unallowed_urls: string[];
+}
+
+export type AuthResponse = BaseResponse<User>

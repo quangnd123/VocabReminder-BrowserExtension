@@ -1,8 +1,8 @@
-import {RemindersSentenceData} from "../shared/types";
+import {RemindersTextResponseData} from "../shared/types";
 
 export function addReminderPopoverToTextNode(
   textNode: Text,
-  remindersSentenceData: RemindersSentenceData,
+  remindersSentenceData: RemindersTextResponseData,
   shadowContainer: HTMLDivElement,
   textNode2highlightPopover: Map<Text, HTMLDivElement[]>
 ){
@@ -12,10 +12,10 @@ export function addReminderPopoverToTextNode(
       return;
     }
 
-    const { sentence, remindersData } = remindersSentenceData;
-    remindersData.forEach(({ word, wordIdx, reminder }) => {
+    const { sentence, reminders_data } = remindersSentenceData;
+    reminders_data.forEach(({ word, word_idx, reminder, related_phrase, related_phrase_sentence }) => {
       const text = textNode.nodeValue || "";
-      if (wordIdx < 0 || wordIdx + word.length > sentence.length || sentence.slice(wordIdx, wordIdx + word.length) !== word){
+      if (word_idx < 0 || word_idx + word.length > sentence.length || sentence.slice(word_idx, word_idx + word.length) !== word){
         console.log("Error: Cannot find word " + word + " in " + sentence);
         return;
       }
@@ -23,8 +23,8 @@ export function addReminderPopoverToTextNode(
       const sentenceIdx = text.indexOf(sentence);
       // Create range to get word position
       const range = document.createRange();
-      range.setStart(textNode, sentenceIdx + wordIdx);
-      range.setEnd(textNode, sentenceIdx + wordIdx + word.length);
+      range.setStart(textNode, sentenceIdx + word_idx);
+      range.setEnd(textNode, sentenceIdx + word_idx + word.length);
       const rect = range.getBoundingClientRect();
 
       // Create container
@@ -49,7 +49,28 @@ export function addReminderPopoverToTextNode(
       // Create popover
       const popover = document.createElement("div");
       popover.classList.add("vocab-reminder-popover");
-      popover.innerHTML = `${reminder}`;
+      popover.innerHTML = `
+        <div style="
+          font-family: Arial, sans-serif;
+          font-size: 14px;
+          line-height: 1.5;
+          color: #1f2937;
+          max-width: 300px;
+        ">
+          <div>
+            <strong>Vocab: </strong>
+            ${related_phrase}
+          </div>
+          <div>
+            <strong>Vocab Sentence: </strong>
+            <q>${related_phrase_sentence}</q>
+          </div>
+          <div style="margin-bottom: 8px;">
+            <strong>Reminder: </strong>
+            ${reminder}
+          </div>
+        </div>
+      `;
       container.appendChild(popover);
       const popoverHeight = popover.offsetHeight;
       popover.style.top = `${rect.y - popoverHeight - 5 + window.scrollX}px`; // Move popover above

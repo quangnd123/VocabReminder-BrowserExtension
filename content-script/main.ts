@@ -1,7 +1,9 @@
 import { split } from "sentence-splitter";
-import { RemindersTextResponse, RemindersSentenceData } from "../shared/types";
+import { RemindersTextResponse, RemindersTextResponseData, User } from "../shared/types";
 import { isValidSentence, getSelectedPhraseAndSentence } from "../shared/utils";
+import { registerHandler, addMessageListener, HandlerMap, sendToBackground } from "../shared/messages";
 import { addReminderPopoverToTextNode } from "./reminder_popup";
+
 
 class DynamicDOMManager {
   private sentence2textNode: Map<string, Text[]> = new Map() // key: sentence, value: textNode that contains the sentence
@@ -10,13 +12,12 @@ class DynamicDOMManager {
   private ignoredTags = ["script", "style", "noscript", "iframe", "a", "button", "input"];
   private requestInterval = 1000; // 1s
   private allowRequest = true; 
-  private pendingRequestTimer : number | null = null; 
-  private allowedLanguages: string[];
+  private pendingRequestTimer: ReturnType<typeof setTimeout> | null = null;
   private observer: MutationObserver;
   private shadowContainer: HTMLDivElement;
 
   constructor(private rootNode: Node) {
-    this.allowedLanguages = ["vie", "eng"];
+
   }
 
   public start(){
@@ -148,15 +149,8 @@ class DynamicDOMManager {
     this.observer.observe(this.rootNode, { childList: true, subtree: true, characterData: true, attributes: true,  attributeFilter: ["style", "class"],});
   }
 
-  private sendMessageBackground(message: object): Promise<any> {
-    return new Promise((resolve) => {
-        chrome.runtime.sendMessage(message, (response) => {
-            resolve(response);
-        });
-    });
-  }
-
   public async getSentences(): Promise<string[]> {
+    // collect sentences that are newly added to the DOM tree.
     let currentSentence2TextNodes: Record<string, Text[]> = {};
     for (const [textNode, processed] of this.textNode2status){
       if (processed === true) continue;
@@ -167,7 +161,7 @@ class DynamicDOMManager {
       const textSentences = split(text).filter(el => el.type === 'Sentence').map(s => s.raw);
       
       for (const sentence of textSentences){
-          if (isValidSentence(sentence, this.allowedLanguages) === false) continue;
+          if (isValidSentence(sentence) === false) continue;
           if (!currentSentence2TextNodes[sentence]){
             currentSentence2TextNodes[sentence] = [];
           }
@@ -175,26 +169,44 @@ class DynamicDOMManager {
       }
     }
     
-    const response = await this.sendMessageBackground({
+    // update status on popup:
+    const sentencesCount = Object.keys(currentSentence2TextNodes).length;
+    if(sentencesCount===0) return[];
+    await sendToBackground({action: "setLogInfo", data: `Info: Detected ${sentencesCount} sentences. Checking the cache...` })
+
+    // get cached reminders for sentences if have
+    const response = await sendToBackground({
       action: "getRemindersTextDataFromCache",
-      sentences: Object.keys(currentSentence2TextNodes)
+      data: Object.keys(currentSentence2TextNodes)
     });
 
+    // update the status of the request
     if(response.status === "error"){
-      throw new Error(response.error);
+      await sendToBackground({action: "setLogInfo", data: "Error at getRemindersTextDataFromCache: " + response.error! })
+      return[];
     }
 
-    const remindersSentenceDataBatch: (RemindersSentenceData|null)[] = response.data;
+    const remindersTextResponseData: (RemindersTextResponseData|null)[] = response.data!;
 
     let result: string[] = [];
+    const hasRemindersSentencesLen = remindersTextResponseData.reduce((sum, obj) => {
+      if (!obj || obj.reminders_data.length===0) return sum;
+      return sum + 1;
+    }, 0);
+    const remindersCount = remindersTextResponseData.reduce((sum, obj) => {
+      if (!obj || obj.reminders_data.length===0) return sum;
+      return sum + obj.reminders_data.length;
+    }, 0);
+    await sendToBackground({action: "setLogInfo", data: `Info: From cache, ${hasRemindersSentencesLen} sentences includes reminders, and there are ${remindersCount} reminders in total.` })
 
+      
+    //put sentences which already have reminders in cache on screen, and return those do not.
     Object.entries(currentSentence2TextNodes).forEach(([sentence, textNodes], index) => {
-      if(remindersSentenceDataBatch[index]){
+      if(remindersTextResponseData[index] && remindersTextResponseData[index]?.reminders_data.length>0){
         for(const textNode of textNodes){
           if (this.textNode2status.get(textNode) === true) 
-            addReminderPopoverToTextNode(textNode, remindersSentenceDataBatch[index], this.shadowContainer, this.textNode2highlightPopover);
+            addReminderPopoverToTextNode(textNode, remindersTextResponseData[index], this.shadowContainer, this.textNode2highlightPopover);
         }
-        console.log("UP: " + sentence, textNodes)
       }
       else{
         if(!this.sentence2textNode.has(sentence)){
@@ -226,69 +238,102 @@ class DynamicDOMManager {
   } 
 
   private async f(){
+    // get sentences on the website
     const sentences = await this.getSentences();
     if (sentences.length === 0) return;
     console.log("Sentences taken");
     console.log(sentences);
-    const remindersTextresponse: RemindersTextResponse = await this.sendMessageBackground({ action: "getRemindersTextFromServer", data: sentences});
+
+    // send sentences to the server and get reminders
+    await sendToBackground({action: "setLogInfo", data: `Info: Sending ${sentences.length} sentences to the server...` })
+    const remindersTextresponse: RemindersTextResponse = await sendToBackground({ 
+      action: "getRemindersTextFromServer", 
+      data: {user_id: user.id, 
+        reading_languages: user.reading_languages, 
+        learning_languages: user.learning_languages, 
+        reminding_language: user.reminding_language!, 
+        free_llm: user.free_llm!,
+        sentences: sentences}
+    });
+
+    // update status of the request on popup
+    if (remindersTextresponse.status === "error"){
+      await sendToBackground({action: "setLogInfo", data: "Error at getRemindersTextFromServer: " + remindersTextresponse.error! })
+      return;
+    } 
+    else{
+      const hasRemindersSentencesLen = remindersTextresponse.data!.length
+      const remindersCount = remindersTextresponse.data!.reduce((sum, obj) => sum + obj.reminders_data.length, 0);
+      await sendToBackground({action: "setLogInfo", data: `Info: From server, ${hasRemindersSentencesLen} sentences includes reminders, and there are ${remindersCount} reminders in total.` })
+    }
     
-    if (!remindersTextresponse || remindersTextresponse.status === "error") return;
-
-    console.log("Put these up: ", remindersTextresponse.data);
-
+    // put up on screen
     for (const remindersSentenceData of remindersTextresponse.data!){
       const sentence = remindersSentenceData.sentence;
       const textNodeArray = this.sentence2textNode.get(sentence);
-      if (!textNodeArray){
-        console.log("Error: Can not find in sentence2textNode the sentence: ", sentence)
-        continue;
-      } 
-      for (const textNode of textNodeArray){
+      for (const textNode of textNodeArray!){
         if (this.textNode2status.get(textNode) === true) {
           addReminderPopoverToTextNode(textNode, remindersSentenceData, this.shadowContainer, this.textNode2highlightPopover);
         }
       }
     }
 
-  }
+    //cache
+    const remindersTextresponseData = remindersTextresponse.data!;
+    //add sentence without reminders in cache
+    const hasRemindersSentences = new Set(remindersTextresponseData.map(item => item.sentence));
+    for (const sentence of sentences){
+      if(!hasRemindersSentences.has(sentence)){
+        remindersTextresponseData.push({sentence: sentence, reminders_data: []})
+      }
+    }
+    const setCacheRes = await sendToBackground({action: "setRemindersTextDataIntoCache", data: remindersTextresponseData})
+    if (setCacheRes.status === "error"){
+      sendToBackground({action: "setLogInfo", data: "Error at setRemindersTextDataIntoCache: " + setCacheRes.error! })
+      return;
+    } 
+    
 
-  public log(status:string, message: string ){
-    console.log(status);
-    console.log(message);
   }
 }
 
 
-let dynamicDOMManager = new DynamicDOMManager(document.body);
-dynamicDOMManager.start();
+const handlers: HandlerMap = {};
 
-chrome.runtime.onMessage.addListener((message, _, sendResponse) => {
-  if (message.action === "getSelectedPhrase") {
-    try {
-      const selectedPhraseData = getSelectedPhraseAndSentence();
-      sendResponse({status: "success", data: selectedPhraseData})
-    } catch (error) {
-      sendResponse({status: "error", error: error})
-      dynamicDOMManager.log("Log Error: ", error instanceof Error ? error.message : String(error))
+registerHandler(
+  "getSelectedPhrase",
+  async () => {
+    const getUserRes = await sendToBackground({action: "getUser"})
+    if (getUserRes.status === "error"){
+      return {status: "error", "error": "Login required!"};
     }
-    
-    return true
-  }
-  else if (message.action === "logError"){
-    dynamicDOMManager.log("Log Error: ", message.message)
-  }
-  else if (message.action === "logSuccess"){
-    dynamicDOMManager.log("Log Success: ", message.message)
+
+    const user = getUserRes.data!;
+    const {phrase, phraseIdx, sentence} = getSelectedPhraseAndSentence();
+    return {status: "success", data: {user_id: user.id, phrase: phrase, phrase_idx: phraseIdx, sentence: sentence }};
+  },
+  handlers
+);
+
+addMessageListener(handlers)
+let dynamicDOMManager = new DynamicDOMManager(document.body);
+let user: User;
+(async () => {
+  const res = await sendToBackground({action: "getUser"})
+  const web_url = window.location.href; 
+  if(res.status === "success"){
+    user = res.data!;
+    if (!user.free_llm || !user.reminding_language || user.learning_languages.length===0 || user.reading_languages.length===0){
+      await sendToBackground({action: "setLogInfo", data: `Warning: Please set up free_llm, reminding_language, learning_languages, and reading_languages` })
+    }
+    else if (user.unallowed_urls.includes(web_url)){
+      await sendToBackground({action: "setLogInfo", data: "Warning: Vocab Reminder is not allowed to work on this website."})
+    }
+    else{
+      dynamicDOMManager.start();
+    }  
   }
   else{
-
+    await sendToBackground({action: "setLogInfo", data: "Error at getUser: " + res.error! })
   }
-});
-
-chrome.runtime.sendMessage({ action: "getUser" }, (response) => {
-  if (chrome.runtime.lastError) {
-    console.error("Error:", chrome.runtime.lastError.message);
-    return;
-  }
-  console.log("Response from background:", response);
-});
+})();

@@ -21,6 +21,6 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
   },
-  "include": ["popup","content_script","background","shared"],
+  "include": ["popup","content_script","background","shared", "vite-env.d.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

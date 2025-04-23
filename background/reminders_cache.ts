@@ -1,26 +1,25 @@
-import { RemindersSentenceData, ReminderSentenceData } from "../shared/types";
+import { RemindersTextResponseData } from "../shared/types";
 
 export class ReminderCache {
-    private static STORAGE_KEY = "reminder_cache";
+    private static STORAGE_KEY = "vocab_reminder_cache";
     private static MAX_STORAGE_SIZE = 4.5 * 1024 * 1024; // Set limit to 4.5MB (safe margin from 5MB)
     private static CLEANUP_BATCH_SIZE = 50; // Number of least used items to remove in cleanup
   
     static initialize(): void {
-      ReminderCache.clear();
       setInterval(() => ReminderCache.clear(), 24 * 60 * 60 * 1000); // Every 24 hours
     }
 
-    static async getBatch(sentences: string[]) : Promise<(RemindersSentenceData|null)[]>{
+    static async getBatch(sentences: string[]) : Promise<(RemindersTextResponseData|null)[]>{
       const cache = await chrome.storage.local.get(ReminderCache.STORAGE_KEY);
-      const data: {[sentence: string]: { remindersData: ReminderSentenceData[]; lastAccessed: number }} = cache[ReminderCache.STORAGE_KEY] || {};
+      const data: {[sentence: string]: { data: RemindersTextResponseData; lastAccessed: number }} = cache[ReminderCache.STORAGE_KEY] || {};
 
       let dataChanged = false;
-      let result: (RemindersSentenceData|null)[] = []
+      let result: (RemindersTextResponseData|null)[] = []
       for (const sentence of sentences){
         if (data[sentence]) {
           data[sentence].lastAccessed = Date.now(); // Update usage timestamp
           dataChanged = true;
-          result.push({sentence: sentence, remindersData: data[sentence].remindersData});
+          result.push(data[sentence].data);
         }
         else {
           result.push(null)
@@ -31,12 +30,12 @@ export class ReminderCache {
       return result;
     }
 
-    static async setBatch(remindersSentenceDataBatch: RemindersSentenceData[]): Promise<void>{
+    static async setBatch(remindersTextResponseDataBatch: RemindersTextResponseData[]): Promise<void>{
       const cache = await chrome.storage.local.get(ReminderCache.STORAGE_KEY);
       let data = cache[ReminderCache.STORAGE_KEY] || {};
 
-      for (const remindersSentenceData of remindersSentenceDataBatch){
-        data[remindersSentenceData.sentence] = { remindersData: remindersSentenceData.remindersData, lastAccessed: Date.now() }; // Store with timestamp
+      for (const remindersTextResponseData of remindersTextResponseDataBatch){
+        data[remindersTextResponseData.sentence] = { data: remindersTextResponseData, lastAccessed: Date.now() }; // Store with timestamp
       }
       
       await chrome.storage.local.set({ [ReminderCache.STORAGE_KEY]: data });
@@ -65,7 +64,7 @@ export class ReminderCache {
       
       if (cache > ReminderCache.MAX_STORAGE_SIZE) {
         const storedData = await chrome.storage.local.get(ReminderCache.STORAGE_KEY);
-        let data: { [sentence: string]: { remindersData: ReminderSentenceData[]; lastAccessed: number } } = storedData[ReminderCache.STORAGE_KEY] || {};
+        let data: { [sentence: string]: {data: RemindersTextResponseData; lastAccessed: number } } = storedData[ReminderCache.STORAGE_KEY] || {};
   
         // Sort entries by last accessed timestamp (oldest first)
         const sortedEntries = Object.entries(data).sort((a, b) => a[1].lastAccessed - b[1].lastAccessed);

@@ -1,55 +1,10 @@
-import { RemindersTextRequest, RemindersTextResponse, CreatePhraseRequest, CreatePhraseResponse } from "../shared/types";
-import { toCamelCase, toSnakeCase } from "../shared/utils";
 import { ReminderCache } from "./reminders_cache";
-import dotenv from 'dotenv'
+import { registerHandler, sendToTab, addMessageListener, HandlerMap, BaseResponse } from "../shared/messages";
+import { createPhrase, getRemindersText, fetchUserSession } from "../shared/requests";
 
-dotenv.config()
-
-async function fetchUserSession(){
-  const response = await fetch(`${process.env.CLIENT_URL}/api/auth/check-session`, {
-    method: "GET",
-    headers: {
-      "Content-Type": "application/json",
-    },
-  });
-
-  const dataResponse = await response.json();
-  return dataResponse
-}
-
-
-async function requestGetRemindersText(remindersTextRequest: RemindersTextRequest){
-    const response = await fetch(`${process.env.SERVER_URL}/reminders-text`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(toSnakeCase(remindersTextRequest)),
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
-    }
-    const responseJson = await response.json()
-    const responseData: RemindersTextResponse = await toCamelCase(responseJson);
-    return responseData;
-}
-
-async function requestCreatePhrase(createPhraseRequest: CreatePhraseRequest){
-    const response = await fetch(`${process.env.SERVER_URL}/create-phrase`, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify(toSnakeCase((createPhraseRequest))),
-    })
-    if (!response.ok) {
-      throw new Error(`HTTP error! Status: ${response.status}`);
-    }
-    const responseJson = await response.json()
-    const responseData: CreatePhraseResponse = await toCamelCase(responseJson);
-    return responseData;
-}
-
-ReminderCache.initialize();
-
+const handlers: HandlerMap = {};
+const tabsInfo: Map<number, [Date,string][]> = new Map();
+console.log(tabsInfo)
 // modify the right-click menu
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
@@ -57,78 +12,109 @@ chrome.runtime.onInstalled.addListener(() => {
     title: "Store highlighted text to the vocab database",
     contexts: ["selection"], // Only show when text is highlighted
   });
+
+  chrome.alarms.create("dailyReminderClear", {
+    periodInMinutes: 1440, // 1440 minutes = 24 hours
+  });
 });
 
-
+// When the alarm triggers
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "dailyReminderClear") {
+    ReminderCache.clear();
+  }
+});
 
 // users click on store phrase
-chrome.contextMenus.onClicked.addListener((info, tab) => {
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!tab || !tab.id) return;
   const tabId = tab.id;
 
   if (info.menuItemId === "createPhrase") {
-    chrome.tabs.sendMessage(tabId, { action: "getSelectedPhrase" }, async (response)=>{
-      if (response.status === "error") return;
-      try {
-        const createPhraseResponse = await requestCreatePhrase(response.data);
-        if(createPhraseResponse.status === "success"){
-          chrome.tabs.sendMessage(tabId, {action: "logSuccess", message: "Phrase added!" + response.data})
-        }
-        else{
-          chrome.tabs.sendMessage(tabId, {action: "logError", message: createPhraseResponse.error})
-        }
-        console.log(createPhraseResponse)
-      } catch (error) {
-        chrome.tabs.sendMessage(tabId, {action: "logError", message: error instanceof Error ? error.message : String(error)})
-      }
-    })
+    const response = await sendToTab(tabId,{ action: "getSelectedPhrase" });
+    if (response.status === "error"){
+      setLogInfo(tabId, "Error at getSelectedPhrase: " + response.error!)
+      return;
+    } 
+    const createPhraseResponse = await createPhrase(response.data!);
+    if(createPhraseResponse.status === "success"){
+      setLogInfo(tabId, "Success: Phrase Added!")
+    }
+    else{
+      setLogInfo(tabId, "Error at createPhrase: " + createPhraseResponse.error!)
+    }
   } 
 });
 
+registerHandler(
+  "getRemindersTextFromServer",
+  async (req) => {
+    const res = await getRemindersText(req);
+    if (res.status === "success") {
+      await ReminderCache.setBatch(res.data!);
+    }
+    return res;
+  },
+  handlers
+);
 
-// background onMessage
-chrome.runtime.onMessage.addListener((message, _, sendResponse) => {
-  if (message.action === "getRemindersTextFromServer") {
-    (async () => {
-      try {
-        const requestGetRemindersTextResponse = await requestGetRemindersText({ sentences: message.data });
+registerHandler(
+  "getUser",
+  async () => {
+    const res = await fetchUserSession();
+    return res;
+  },
+  handlers
+);
 
-        if (requestGetRemindersTextResponse.status === "success") {
-          await ReminderCache.setBatch(requestGetRemindersTextResponse.data!);
-          sendResponse({ status: "success", data: requestGetRemindersTextResponse.data });
-        } else {
-          sendResponse({ status: "error", error: requestGetRemindersTextResponse.error });
-        }
-      } catch (error) {
-        sendResponse({ status: "error", error: error instanceof Error ? error.message : String(error)});
-      }
-    })();
+registerHandler(
+  "getRemindersTextDataFromCache",
+  async (sentences) => {
+    const res = await ReminderCache.getBatch(sentences);
+    return {status: "success", data: res};;
+  },
+  handlers
+);
 
-    return true; // ✅ Keeps the background script alive until `sendResponse` is called
+registerHandler(
+  "setRemindersTextDataIntoCache",
+  async (req) => {
+    await ReminderCache.setBatch(req);
+    return {status: "success"};;
+  },
+  handlers
+);
+
+async function setLogInfo(tabId: number, info: string): Promise<BaseResponse<null>> {
+  if(!tabsInfo.has(tabId)){
+    tabsInfo.set(tabId, [])
   }
+  tabsInfo.get(tabId)!.push([new Date(), info]);
+  return {status: "success"};
+}
 
-  else if (message.action === "getRemindersTextDataFromCache") {
-    (async () => {
-      try {
-        const remindersSentenceDataBatch = await ReminderCache.getBatch(message.sentences);
-        sendResponse({ status: "success", data: remindersSentenceDataBatch });
-      } catch (error) {
-        sendResponse({ status: "error", error: error instanceof Error ? error.message : String(error) });
-      }
-    })();
-    
-    return true; // ✅ Keeps the background script alive until `sendResponse` is called
-  }
-  else if (message.action === "getUser"){
-    (async () => {
-      try {
-        const data = await fetchUserSession();
-        sendResponse({ status: "success", data: data });
-      } catch (error) {
-        sendResponse({ status: "error", error: error instanceof Error ? error.message : String(error) });
-      }
-    })();
-    
-    return true;
-  }
-});
+registerHandler(
+  "setLogInfo",
+  async function setLogInfo(info, sender){
+    if(!sender?.tab?.id) return({status: "error", error: "Cannot identify tabId to log info"})
+    if(!tabsInfo.has(sender.tab.id)){
+      tabsInfo.set(sender.tab.id, [])
+    }
+    tabsInfo.get(sender.tab.id)!.push([new Date(), info]);
+    return {status: "success"};
+  },
+  handlers
+);
+
+registerHandler(
+  "getLogInfo",
+  async (tabId)=>{
+    if (tabsInfo.has(tabId))
+      return {status: "success", data: tabsInfo.get(tabId)}
+    return {status: "success", data: []}
+  },
+  handlers
+);
+
+
+addMessageListener(handlers)
