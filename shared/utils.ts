@@ -1,11 +1,11 @@
-import {franc} from 'franc'
+// import {franc} from 'franc'
 import { split } from 'sentence-splitter';
 
 function preprocessText(text: string): string {
     return text.trim();
 }
 
-function isValidSentence(sentence: string, allowedLanguages: string[]) {
+function isValidSentence(sentence: string) {
   // Trim whitespace and normalize spaces
   sentence = sentence.trim().replace(/\s+/g, ' ');
 
@@ -24,43 +24,12 @@ function isValidSentence(sentence: string, allowedLanguages: string[]) {
   // Ignore random keyboard mashing (e.g., "asdjklasjd", "qwertyuiop")
   if (/^(?:asdf|qwerty|zxcvbn|poiuy|mnbvc|lkjhg|gfdsa){1,}$/i.test(sentence)) return false;
 
-  const detectedLang = franc(sentence, { minLength: 2, only: allowedLanguages });
-  if (!allowedLanguages.includes(detectedLang)) return false;
+  // const detectedLang = franc(sentence, { minLength: 2, only: allowedLanguages });
+  // if (!allowedLanguages.includes(detectedLang)) return false;
 
   return true; // Passed all filters, it's meaningful!
 }
 
-
-  
-// Convert When Sending Data to the server
-function toSnakeCase(obj: any): any {
-    if (Array.isArray(obj)) {
-        return obj.map(toSnakeCase);
-    } else if (obj !== null && typeof obj === "object") {
-        return Object.fromEntries(
-            Object.entries(obj).map(([key, value]) => [
-                key.replace(/([A-Z])/g, "_$1").toLowerCase(), // Convert camelCase to snake_case
-                toSnakeCase(value)
-            ])
-        );
-    }
-    return obj;
-}
-
-// Convert When Receiving Data from the server
-function toCamelCase(obj: any): any {
-    if (Array.isArray(obj)) {
-        return obj.map(toCamelCase);
-    } else if (obj !== null && typeof obj === "object") {
-        return Object.fromEntries(
-            Object.entries(obj).map(([key, value]) => [
-                key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase()), // Convert snake_case to camelCase
-                toCamelCase(value)
-            ])
-        );
-    }
-    return obj;
-}
 
 function getSelectedPhraseAndText() {
   function getTextInRange(parent: Node, startNode: Node, endNode: Node): string {
@@ -181,5 +150,5 @@ function getSelectedPhraseAndSentence() {
 
 
 
-export {isValidSentence, preprocessText, toCamelCase, toSnakeCase, getSelectedPhraseAndSentence};
+export {isValidSentence, preprocessText, getSelectedPhraseAndSentence};
 
