@@ -18,10 +18,19 @@ export type CreatePhraseRequest = {
   phrase: string
   phrase_idx: number
   sentence: string
-  language?: string
 }
 
 export type CreatePhraseResponse = BaseResponse<PhraseData>
+
+export type TranslatePhraseRequest = {
+  user_id: string
+  phrase: string
+  phrase_idx: number
+  sentence: string
+  translate_language: string
+}
+
+export type TranslatePhraseResponse = BaseResponse<string>
 
 
 //----------------- Reminders Text -----------------
@@ -29,9 +38,8 @@ export type CreatePhraseResponse = BaseResponse<PhraseData>
 export type RemindersTextRequest = {
   user_id: string;
   reading_languages: string[];
-  reminding_language: string;
+  llm_response_language: string;
   learning_languages: string[];
-  free_llm: string;
   sentences: string[];
 };
 
@@ -61,8 +69,7 @@ export type User = {
   email: string | null;
   reading_languages: string[];
   learning_languages: string[];
-  reminding_language: string | null;
-  free_llm: string | null;
+  llm_response_language: string | null;
   unallowed_urls: string[];
 }
 

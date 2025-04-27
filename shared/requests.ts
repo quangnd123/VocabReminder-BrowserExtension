@@ -1,4 +1,4 @@
-import { RemindersTextRequest, RemindersTextResponse, CreatePhraseRequest, CreatePhraseResponse, AuthResponse } from "./types";
+import { RemindersTextRequest, RemindersTextResponse, CreatePhraseRequest, CreatePhraseResponse, AuthResponse, TranslatePhraseRequest, TranslatePhraseResponse } from "./types";
 
 const clientURL = import.meta.env.VITE_CLIENT_URL
 const serverURL = import.meta.env.VITE_SERVER_URL
@@ -54,7 +54,7 @@ async function getRequest<TResponse>(to: string ,path: string): Promise<TRespons
 
 
 export function fetchUserSession(){
-    return getRequest<AuthResponse>("client","/api/auth/check-session");
+    return getRequest<AuthResponse>("client","api/auth/check-session");
 }
 
 
@@ -65,4 +65,8 @@ export function getRemindersText(req: RemindersTextRequest): Promise<RemindersTe
 
 export function createPhrase(req: CreatePhraseRequest): Promise<CreatePhraseResponse> {
     return postRequest<CreatePhraseRequest, CreatePhraseResponse>("create_phrase", req);
+}
+
+export function translatePhrase(req: TranslatePhraseRequest): Promise<TranslatePhraseResponse>{
+  return postRequest<TranslatePhraseRequest, TranslatePhraseResponse>("translate_phrase", req)
 }

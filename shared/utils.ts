@@ -65,8 +65,7 @@ function getSelectedPhraseAndText() {
   if (!text) {
     throw new Error("Failed to retrieve selected text.");
   }
-
-  return {text, phrase: selection.toString(), startIdx: range.startOffset};
+  return {text, phrase: selection.toString(), startIdx: range.startOffset, range};
 }
 
 function normalizeTextSpaceAndUpdateIndex({ text, phrase, startIdx }: {text: string, phrase: string, startIdx: number}) {
@@ -142,10 +141,10 @@ function getPhraseContainingSentence({
 
 
 function getSelectedPhraseAndSentence() {
-  const {text, phrase, startIdx} = getSelectedPhraseAndText();
+  const {text, phrase, startIdx, range} = getSelectedPhraseAndText();
   const {cleanedText, cleanedPhrase, newStartIdx, newEndIdx} = normalizeTextSpaceAndUpdateIndex({text, phrase, startIdx});
   const {sentence, phraseIdx} = getPhraseContainingSentence({text:cleanedText, startIdx: newStartIdx, endIdx: newEndIdx})
-  return {phrase: cleanedPhrase, phraseIdx, sentence}
+  return {phrase: cleanedPhrase, phraseIdx, sentence, range}
 }
 
 

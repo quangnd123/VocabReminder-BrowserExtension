@@ -1,4 +1,4 @@
-import { User, CreatePhraseRequest, RemindersTextRequest, RemindersTextResponseData} from "./types";
+import { User, RemindersTextRequest, RemindersTextResponseData} from "./types";
 
 interface ActionMap {
   getUser: {
@@ -7,7 +7,11 @@ interface ActionMap {
   };
   getSelectedPhrase:{
     input_type: void;
-    output_type: CreatePhraseRequest;
+    output_type: {  
+      phrase: string
+      phrase_idx: number
+      sentence: string
+    };
   }
   getRemindersTextFromServer:{
     input_type: RemindersTextRequest;
@@ -28,6 +32,22 @@ interface ActionMap {
   getLogInfo:{
     input_type: number
     output_type: [Date, string][]
+  }
+  preSelectPhrase:{
+    input_type: string // textContent
+    output_type: {
+      popoverId: string
+      phrase: string
+      phrase_idx: number
+      sentence: string
+    } 
+  }
+  afterSelectPhrase:{
+    input_type: {
+      popoverId: string
+      textContent: string
+    }
+    output_type: void
   }
   // Add more actions here...
 }

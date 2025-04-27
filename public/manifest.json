@@ -5,15 +5,12 @@
     "description": "Link your vocabulary to what you see",
     "icons": {
         "16": "icons/icon16.png",
+        "32": "icons/icon32.png",
         "48": "icons/icon48.png",
         "128": "icons/icon128.png"
     },
     "action": {
-        "default_popup": "popup/index.html",
-        "default_icon": {
-          "16": "icons/icon16.png",
-          "48": "icons/icon48.png"
-        }
+        "default_popup": "popup/index.html"
     },
     "permissions": [
         "scripting",

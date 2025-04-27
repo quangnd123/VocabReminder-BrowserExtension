@@ -2,8 +2,10 @@ import { split } from "sentence-splitter";
 import { RemindersTextResponse, RemindersTextResponseData, User } from "../shared/types";
 import { isValidSentence, getSelectedPhraseAndSentence } from "../shared/utils";
 import { registerHandler, addMessageListener, HandlerMap, sendToBackground } from "../shared/messages";
-import { addReminderPopoverToTextNode } from "./reminder_popup";
+import { addReminderPopoverToTextNode } from "./reminder-popover";
+import { addPopover, updatePopoverContent } from "./popover";
 
+const clientURL = import.meta.env.VITE_CLIENT_URL
 
 class DynamicDOMManager {
   private sentence2textNode: Map<string, Text[]> = new Map() // key: sentence, value: textNode that contains the sentence
@@ -18,11 +20,14 @@ class DynamicDOMManager {
 
   constructor(private rootNode: Node) {
 
+    this.initCss()
+  }
+  
+  public getShadowContainer(){
+    return this.shadowContainer;
   }
 
   public start(){
-    this.initCss()
-
     this.handleMutationNodes(this.rootNode, "add");
 
     this.pendingRequestTimer = setTimeout(async()=>{
@@ -35,6 +40,7 @@ class DynamicDOMManager {
 
   private initCss(){
     const shadowHost = document.createElement("div");
+    shadowHost.id = "vocab-reminder"
     const shadowRoot = shadowHost.attachShadow({ mode: "open" });
     if (!document.body.parentNode) return;
 
@@ -251,8 +257,7 @@ class DynamicDOMManager {
       data: {user_id: user.id, 
         reading_languages: user.reading_languages, 
         learning_languages: user.learning_languages, 
-        reminding_language: user.reminding_language!, 
-        free_llm: user.free_llm!,
+        llm_response_language: user.llm_response_language!, 
         sentences: sentences}
     });
 
@@ -303,17 +308,35 @@ const handlers: HandlerMap = {};
 registerHandler(
   "getSelectedPhrase",
   async () => {
-    const getUserRes = await sendToBackground({action: "getUser"})
-    if (getUserRes.status === "error"){
-      return {status: "error", "error": "Login required!"};
-    }
-
-    const user = getUserRes.data!;
     const {phrase, phraseIdx, sentence} = getSelectedPhraseAndSentence();
-    return {status: "success", data: {user_id: user.id, phrase: phrase, phrase_idx: phraseIdx, sentence: sentence }};
+    return {status: "success", data: {phrase: phrase, phrase_idx: phraseIdx, sentence: sentence }};
   },
   handlers
 );
+
+registerHandler(
+  "preSelectPhrase",
+  async (textContent) => {
+    const {phrase, phraseIdx, sentence, range} = getSelectedPhraseAndSentence();
+    const shadowContainer = dynamicDOMManager.getShadowContainer()
+    const popoverId = addPopover(textContent, range, shadowContainer)
+    return {status: "success", data: {phrase: phrase, phrase_idx: phraseIdx, sentence: sentence, popoverId: popoverId}};
+  },
+  handlers
+);
+
+registerHandler(
+  "afterSelectPhrase",
+  async ({popoverId, textContent}) => {
+    const shadowContainer = dynamicDOMManager.getShadowContainer()
+    const popover = shadowContainer.querySelector(`#${popoverId}`) as HTMLDivElement;
+    if(!popover) return {status: "error", error: "popover not found"}
+    updatePopoverContent(popover ,textContent)
+    return {status: "success"};
+  },
+  handlers
+);
+
 
 addMessageListener(handlers)
 let dynamicDOMManager = new DynamicDOMManager(document.body);
@@ -323,8 +346,8 @@ let user: User;
   const web_url = window.location.href; 
   if(res.status === "success"){
     user = res.data!;
-    if (!user.free_llm || !user.reminding_language || user.learning_languages.length===0 || user.reading_languages.length===0){
-      await sendToBackground({action: "setLogInfo", data: `Warning: Please set up free_llm, reminding_language, learning_languages, and reading_languages` })
+    if (!user.llm_response_language || user.learning_languages.length===0 || user.reading_languages.length===0){
+      await sendToBackground({action: "setLogInfo", data: `Warning: Please go to ${clientURL}/dashboard/account set up llm response language, learning languages, and reading languages` })
     }
     else if (user.unallowed_urls.includes(web_url)){
       await sendToBackground({action: "setLogInfo", data: "Warning: Vocab Reminder is not allowed to work on this website."})

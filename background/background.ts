@@ -1,15 +1,22 @@
 import { ReminderCache } from "./reminders_cache";
 import { registerHandler, sendToTab, addMessageListener, HandlerMap, BaseResponse } from "../shared/messages";
-import { createPhrase, getRemindersText, fetchUserSession } from "../shared/requests";
+import { createPhrase, getRemindersText, fetchUserSession, translatePhrase } from "../shared/requests";
 
 const handlers: HandlerMap = {};
 const tabsInfo: Map<number, [Date,string][]> = new Map();
-console.log(tabsInfo)
+const clientURL = import.meta.env.VITE_CLIENT_URL
+
 // modify the right-click menu
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "createPhrase",
-    title: "Store highlighted text to the vocab database",
+    title: "Store this vocab",
+    contexts: ["selection"], // Only show when text is highlighted
+  });
+
+  chrome.contextMenus.create({
+    id: "translatePhrase",
+    title: "Translate with AI",
     contexts: ["selection"], // Only show when text is highlighted
   });
 
@@ -31,17 +38,53 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const tabId = tab.id;
 
   if (info.menuItemId === "createPhrase") {
-    const response = await sendToTab(tabId,{ action: "getSelectedPhrase" });
-    if (response.status === "error"){
-      setLogInfo(tabId, "Error at getSelectedPhrase: " + response.error!)
+    // check user llm and translate_language
+    const getUserResponse = await fetchUserSession();
+    if (getUserResponse.status === "error"){
+      await sendToTab(tabId,{ action: "preSelectPhrase", data: `Error: Please login at ${clientURL}/login`});
+      return;
+    }
+    const user = getUserResponse.data!;
+    
+    const preTranslatePhraseResponse = await sendToTab(tabId,{ action: "preSelectPhrase", data: "Adding vocab ..." });
+    if (preTranslatePhraseResponse.status === "error"){
+      setLogInfo(tabId, "Error at preSelectPhrase: " + preTranslatePhraseResponse.error!)
       return;
     } 
-    const createPhraseResponse = await createPhrase(response.data!);
-    if(createPhraseResponse.status === "success"){
-      setLogInfo(tabId, "Success: Phrase Added!")
+    const {phrase, phrase_idx, sentence, popoverId} = preTranslatePhraseResponse.data!
+    const createPhraseResponse = await createPhrase({phrase: phrase, phrase_idx: phrase_idx, sentence: sentence , user_id: user.id});
+    if (createPhraseResponse.status==="success"){
+      await sendToTab(tabId,{ action: "afterSelectPhrase", data: {popoverId: popoverId, textContent: "Success: Vocab added!"}})
     }
     else{
-      setLogInfo(tabId, "Error at createPhrase: " + createPhraseResponse.error!)
+      await sendToTab(tabId,{ action: "afterSelectPhrase", data: {popoverId: popoverId, textContent: "Error: " + createPhraseResponse.error!}})
+    }
+  } 
+  else if (info.menuItemId === "translatePhrase"){
+    // check user llm and translate_language
+    const getUserResponse = await fetchUserSession();
+    if (getUserResponse.status === "error"){
+      await sendToTab(tabId,{ action: "preSelectPhrase", data: `Error: Please login at ${clientURL}/login`});
+      return;
+    }
+    const user = getUserResponse.data!;
+    if(!user.llm_response_language){
+      await sendToTab(tabId,{ action: "preSelectPhrase", data: `Error: Please go to ${clientURL}/dashboard/account and choose a llm response language!`});
+      return;
+    }
+
+    const preTranslatePhraseResponse = await sendToTab(tabId,{ action: "preSelectPhrase", data: "Translating phrase ..." });
+    if (preTranslatePhraseResponse.status === "error"){
+      setLogInfo(tabId, "Error at preSelectPhrase: " + preTranslatePhraseResponse.error!)
+      return;
+    } 
+    const {phrase, phrase_idx, sentence, popoverId} = preTranslatePhraseResponse.data!
+    const translatePhraseResponse = await translatePhrase({phrase: phrase, phrase_idx: phrase_idx, sentence: sentence, translate_language: user.llm_response_language, user_id: user.id})
+    if (translatePhraseResponse.status==="success"){
+      await sendToTab(tabId,{ action: "afterSelectPhrase", data: {popoverId: popoverId, textContent: translatePhraseResponse.data!}})
+    }
+    else{
+      await sendToTab(tabId,{ action: "afterSelectPhrase", data: {popoverId: popoverId, textContent: "Error: " + translatePhraseResponse.error!}})
     }
   } 
 });

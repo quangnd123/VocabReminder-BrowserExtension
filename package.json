@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build --config vite.config.ts && vite build --config vite-content.config.ts && vite build --config vite-background.config.ts",
+    "build-dev": "bun tsc && bun vite build --mode development --config vite.config.ts && bun vite build --mode development --config vite-content.config.ts && bun vite build --mode development --config vite-background.config.ts",
     "lint": "eslint .",
     "preview": "vite preview"
   },
