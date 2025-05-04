@@ -25,7 +25,6 @@
     position: absolute;
     visibility: hidden;
     background: #fff9c4;
-    z-index: 9999;
     color: #333; /* Dark gray for readability */
     border: 1px solid black;
     border-radius: 5px;

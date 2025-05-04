@@ -1,7 +1,7 @@
 import { split } from "sentence-splitter";
-import { RemindersTextResponse, RemindersTextResponseData, User } from "../shared/types";
+import { ReminderTextResponseData, RemindersTextResponseCache } from "../shared/types";
 import { isValidSentence, getSelectedPhraseAndSentence } from "../shared/utils";
-import { registerHandler, addMessageListener, HandlerMap, sendToBackground } from "../shared/messages";
+import { registerHandler, addMessageListener, HandlerMap, sendToBackground, removeMessageListener } from "../shared/messages";
 import { addReminderPopoverToTextNode } from "./reminder-popover";
 import { addPopover, updatePopoverContent } from "./popover";
 
@@ -16,31 +16,38 @@ class DynamicDOMManager {
   private allowRequest = true; 
   private pendingRequestTimer: ReturnType<typeof setTimeout> | null = null;
   private observer: MutationObserver;
-  private shadowContainer: HTMLDivElement;
-
+  private shadowContainer!: HTMLDivElement;
+  private trackedSentences: Set<string> = new Set(); // sentences being tracked in the DOM tree, not yet sent to the server.
+  private sentSentences: Set<string> = new Set() // sentences that are already sent to the server and waiting for reminders.
+  private requestID = 1;
+  
   constructor(private rootNode: Node) {
+    this.observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.type === 'childList') {
+          mutation.addedNodes.forEach((node) => this.handleMutationNodes(node, "add"));
+          mutation.removedNodes.forEach((node) => this.handleMutationNodes(node, "remove"));
+        }
+        else if (mutation.type === 'attributes') {
+          this.handleMutationNodes(mutation.target, "add");
+        }
+        else if (mutation.type === 'characterData'){
+          this.handleMutationNodes(mutation.target, "add");
+        }
+      }
+
+      this.setPendingRequestTimer()
+    });
+
 
     this.initCss()
-  }
-  
-  public getShadowContainer(){
-    return this.shadowContainer;
-  }
 
-  public start(){
-    this.handleMutationNodes(this.rootNode, "add");
 
-    this.pendingRequestTimer = setTimeout(async()=>{
-          await this.getRemindersTextFromServer();
-        }, this.requestInterval)
-        
-    this.observeDOMChanges();
-    
   }
 
   private initCss(){
     const shadowHost = document.createElement("div");
-    shadowHost.id = "vocab-reminder"
+    shadowHost.id = "vocab-reminder-shadow-host"
     const shadowRoot = shadowHost.attachShadow({ mode: "open" });
     if (!document.body.parentNode) return;
 
@@ -64,31 +71,44 @@ class DynamicDOMManager {
     this.shadowContainer = shadowContainer;
   }
 
-  private handleMutationNodes(rootNode: Node, action: string) {
-    if(this.shouldIgnoreNode(rootNode)) return;
+  private setPendingRequestTimer(){
+    if (this.pendingRequestTimer !== null) return;
 
-    if (rootNode.nodeType === Node.TEXT_NODE) {
-      if (action === "add") this.addTextNode(rootNode as Text);
-      else this.removeTextNode(rootNode as Text);
-    }
-    else if (rootNode.nodeType === Node.ELEMENT_NODE) {
-      const treeWalker = document.createTreeWalker(
-        rootNode,
-        NodeFilter.SHOW_ELEMENT,
-        (node) => { 
-          if(this.shouldIgnoreNode(node)) return NodeFilter.FILTER_REJECT;
-          return NodeFilter.FILTER_ACCEPT;
-        }
-      );
-      while (treeWalker.nextNode()) {
-        for (const node of treeWalker.currentNode.childNodes) {
-          if (node.nodeType === Node.TEXT_NODE) {
-            if (action === "add") this.addTextNode(node as Text);
-            else this.removeTextNode(node as Text);
-          }
+    this.pendingRequestTimer = setTimeout(
+      async()=>{
+        this.pendingRequestTimer = null;
+        await this.getRemindersText();
+      }, 
+      this.requestInterval)
+  }
+
+  public start(){
+    this.handleMutationNodes(this.rootNode, "add");
+
+    this.setPendingRequestTimer();
+        
+    this.observeDOMChanges();
+    
+  }
+
+  private handleMutationNodes(rootNode: Node, action: string) {
+    const dfs = (node: Node) => {
+      if (this.shouldIgnoreNode(node)) return;
+  
+      if (node.nodeType === Node.TEXT_NODE) {
+        if (action === "add") this.addTextNode(node as Text);
+        else this.removeTextNode(node as Text);
+      }
+  
+      // Recurse into children if element
+      else if (node.nodeType === Node.ELEMENT_NODE) {
+        for (const child of node.childNodes) {
+          dfs(child);
         }
       }
-    }
+    };
+  
+    dfs(rootNode);
   }
 
   private shouldIgnoreNode(node: Node): boolean {
@@ -106,8 +126,6 @@ class DynamicDOMManager {
   private addTextNode(node: Text) {
     if (!node.textContent || node.textContent.trim()==="") return;
     this.textNode2status.set(node, false);
-    // console.log("ADD: "); 
-    // console.log(node.parentElement);
   }
 
   private removeTextNode(node: Text) {
@@ -121,41 +139,14 @@ class DynamicDOMManager {
       });
     }
     this.textNode2highlightPopover.delete(node);
-
-    // console.log("Remove: "); 
-    // console.log(node.parentElement);
   }
 
   // Observe DOM changes using MutationObserver
   private observeDOMChanges() {
-    this.observer = new MutationObserver((mutations) => {
-      // add or remove text nodes
-      for (const mutation of mutations) {
-        if (mutation.type === 'childList') {
-          mutation.addedNodes.forEach((node) => this.handleMutationNodes(node, "add"));
-          mutation.removedNodes.forEach((node) => this.handleMutationNodes(node, "remove"));
-        }
-        else if (mutation.type === 'attributes') {
-          this.handleMutationNodes(mutation.target, "add");
-        }
-        else if (mutation.type === 'characterData'){
-          this.handleMutationNodes(mutation.target, "add");
-        }
-      }
-
-      // If timeout is already set
-      if (this.pendingRequestTimer === null){
-        this.pendingRequestTimer = setTimeout(async()=>{
-          await this.getRemindersTextFromServer();
-        }, this.requestInterval)
-      }
-      
-    });
-
     this.observer.observe(this.rootNode, { childList: true, subtree: true, characterData: true, attributes: true,  attributeFilter: ["style", "class"],});
   }
 
-  public async getSentences(): Promise<string[]> {
+  public getSentences(): Record<string, Text[]> {
     // collect sentences that are newly added to the DOM tree.
     let currentSentence2TextNodes: Record<string, Text[]> = {};
     for (const [textNode, processed] of this.textNode2status){
@@ -174,16 +165,29 @@ class DynamicDOMManager {
           currentSentence2TextNodes[sentence].push(textNode)
       }
     }
-    
-    // update status on popup:
-    const sentencesCount = Object.keys(currentSentence2TextNodes).length;
-    if(sentencesCount===0) return[];
-    await sendToBackground({action: "setLogInfo", data: `Info: Detected ${sentencesCount} sentences. Checking the cache...` })
+
+    return currentSentence2TextNodes;
+  }
+
+  private setRequestLock(){
+    this.allowRequest = false;
+  }
+
+  public releaseRequestLock(){
+    this.allowRequest = true;
+  }
+
+  private isRequestLock(){
+    return !this.allowRequest;
+  }
+
+  private async getRemindersTextFromCache(currentSentence2TextNodes: Record<string, Text[]>){
+    const sentences = Object.keys(currentSentence2TextNodes);
 
     // get cached reminders for sentences if have
     const response = await sendToBackground({
       action: "getRemindersTextDataFromCache",
-      data: Object.keys(currentSentence2TextNodes)
+      data: sentences
     });
 
     // update the status of the request
@@ -192,26 +196,31 @@ class DynamicDOMManager {
       return[];
     }
 
-    const remindersTextResponseData: (RemindersTextResponseData|null)[] = response.data!;
+    const remindersTextResponseCache: RemindersTextResponseCache = response.data!;
 
     let result: string[] = [];
-    const hasRemindersSentencesLen = remindersTextResponseData.reduce((sum, obj) => {
-      if (!obj || obj.reminders_data.length===0) return sum;
-      return sum + 1;
-    }, 0);
-    const remindersCount = remindersTextResponseData.reduce((sum, obj) => {
-      if (!obj || obj.reminders_data.length===0) return sum;
-      return sum + obj.reminders_data.length;
-    }, 0);
-    await sendToBackground({action: "setLogInfo", data: `Info: From cache, ${hasRemindersSentencesLen} sentences includes reminders, and there are ${remindersCount} reminders in total.` })
+    let cachedSentencesCount = 0;
+    let cachedRemindersCount = 0;
+    for (const [_, value] of Object.entries(remindersTextResponseCache)) {
+      cachedSentencesCount++;
+      if (value.length > 0) {
+        cachedRemindersCount += value.length;
+      }
+    }
+    await sendToBackground({action: "setLogInfo", data: `Info: From cache, ${cachedSentencesCount} sentences includes reminders, and there are ${cachedRemindersCount} reminders in total.` })
 
       
     //put sentences which already have reminders in cache on screen, and return those do not.
-    Object.entries(currentSentence2TextNodes).forEach(([sentence, textNodes], index) => {
-      if(remindersTextResponseData[index] && remindersTextResponseData[index]?.reminders_data.length>0){
+    for (const sentence of sentences){
+      const textNodes = currentSentence2TextNodes[sentence];
+      if(sentence in remindersTextResponseCache){
+        if (remindersTextResponseCache[sentence].length==0) continue;
         for(const textNode of textNodes){
-          if (this.textNode2status.get(textNode) === true) 
-            addReminderPopoverToTextNode(textNode, remindersTextResponseData[index], this.shadowContainer, this.textNode2highlightPopover);
+          if (this.textNode2status.get(textNode) === true) { // check if textNode data mutation not happened
+            for (const reminderSentenceData of remindersTextResponseCache[sentence]){
+              addReminderPopoverToTextNode(textNode, reminderSentenceData, this.shadowContainer, this.textNode2highlightPopover);
+            }
+          }
         }
       }
       else{
@@ -221,142 +230,272 @@ class DynamicDOMManager {
         }
         this.sentence2textNode.get(sentence)!.push(...textNodes);
       }
-    });
-
-    return result;
+    }
+    return result
   }
 
-  private async getRemindersTextFromServer(){
-    // request is not allowed now, wait till the next cycle
-    if (!this.allowRequest){
-      this.pendingRequestTimer = setTimeout(async()=>{
-        await this.getRemindersTextFromServer();
-      }, this.requestInterval)
+  private async getRemindersText(){
+    // check if user is logged in
+    const authRes = await checkAuth();
+    if (authRes.status === "error"){
+      this.trackedSentences.clear() // clear all tracked text nodes so far
+      return;
+    } 
+        
+    // track newly added sentences on DOM and show reminders for sentences that are already in cache.
+    const currentSentence2TextNodes = this.getSentences();
+    const sentencesCount = Object.keys(currentSentence2TextNodes).length
+    await sendToBackground({action: "setLogInfo", data: `Info: Detected ${sentencesCount} sentences. Checking the cache...` })
+    if(sentencesCount === 0) return;
+
+    const sentencesWithoutReminders = await this.getRemindersTextFromCache(currentSentence2TextNodes);
+    await sendToBackground({action: "setLogInfo", data: `Info: ${sentencesWithoutReminders.length} sentences will be sent to the server`})
+    if (sentencesWithoutReminders.length === 0)return;
+
+    sentencesWithoutReminders.forEach(item => this.trackedSentences.add(item));
+
+    //if the previous request is not done, wait till the next cycle.
+    if (this.isRequestLock()){
+      this.setPendingRequestTimer(); 
       return;
     }
 
-    this.allowRequest = false;
-    this.pendingRequestTimer = null; // Reset timer
+    this.setRequestLock() // from now on, no request is allowed.
 
-    await this.f();
+    // send sentences to the server
+    this.sentSentences = new Set(this.trackedSentences); 
+    this.trackedSentences.clear(); 
 
-    this.allowRequest = true;
-  } 
-
-  private async f(){
-    // get sentences on the website
-    const sentences = await this.getSentences();
-    if (sentences.length === 0) return;
-    console.log("Sentences taken");
-    console.log(sentences);
-
-    // send sentences to the server and get reminders
-    await sendToBackground({action: "setLogInfo", data: `Info: Sending ${sentences.length} sentences to the server...` })
-    const remindersTextresponse: RemindersTextResponse = await sendToBackground({ 
+    await sendToBackground({action: "setLogInfo", data: `Info: The request ${this.requestID} sending ${this.sentSentences.size} sentences to the server...` })
+    const user = authRes.data!;
+    const getRemindersTextResponse = await sendToBackground({ 
       action: "getRemindersTextFromServer", 
-      data: {user_id: user.id, 
+      data: {
+        request_id: this.requestID,
+        user_id: user.id, 
         reading_languages: user.reading_languages, 
         learning_languages: user.learning_languages, 
         llm_response_language: user.llm_response_language!, 
-        sentences: sentences}
+        sentences: Array.from(this.sentSentences)
+      }
     });
-
-    // update status of the request on popup
-    if (remindersTextresponse.status === "error"){
-      await sendToBackground({action: "setLogInfo", data: "Error at getRemindersTextFromServer: " + remindersTextresponse.error! })
-      return;
+  
+    if(getRemindersTextResponse.status === "error"){
+      await sendToBackground({action: "setLogInfo", data: "Error at getRemindersTextFromServer: " + getRemindersTextResponse.error! })
+      this.renewRequestID();
+      this.releaseRequestLock() // release the request lock
     } 
-    else{
-      const hasRemindersSentencesLen = remindersTextresponse.data!.length
-      const remindersCount = remindersTextresponse.data!.reduce((sum, obj) => sum + obj.reminders_data.length, 0);
-      await sendToBackground({action: "setLogInfo", data: `Info: From server, ${hasRemindersSentencesLen} sentences includes reminders, and there are ${remindersCount} reminders in total.` })
-    }
-    
+    return;
+  }
+
+  public async showRemindersTextData(ReminderTextResponseData: ReminderTextResponseData){
+    const {is_final, reminders_text_data} = ReminderTextResponseData;
+
     // put up on screen
-    for (const remindersSentenceData of remindersTextresponse.data!){
-      const sentence = remindersSentenceData.sentence;
+    for (const reminderData of reminders_text_data){
+      const sentence = reminderData.sentence;
       const textNodeArray = this.sentence2textNode.get(sentence);
+      this.sentSentences.delete(sentence); 
       for (const textNode of textNodeArray!){
         if (this.textNode2status.get(textNode) === true) {
-          addReminderPopoverToTextNode(textNode, remindersSentenceData, this.shadowContainer, this.textNode2highlightPopover);
+          addReminderPopoverToTextNode(textNode, reminderData, this.shadowContainer, this.textNode2highlightPopover);
         }
       }
     }
 
     //cache
-    const remindersTextresponseData = remindersTextresponse.data!;
-    //add sentence without reminders in cache
-    const hasRemindersSentences = new Set(remindersTextresponseData.map(item => item.sentence));
-    for (const sentence of sentences){
-      if(!hasRemindersSentences.has(sentence)){
-        remindersTextresponseData.push({sentence: sentence, reminders_data: []})
-      }
-    }
-    const setCacheRes = await sendToBackground({action: "setRemindersTextDataIntoCache", data: remindersTextresponseData})
+    const setCacheRes = await sendToBackground({action: "setRemindersTextDataIntoCache", data: reminders_text_data})
     if (setCacheRes.status === "error"){
       sendToBackground({action: "setLogInfo", data: "Error at setRemindersTextDataIntoCache: " + setCacheRes.error! })
       return;
     } 
-    
 
+    // for sentences that are sent to the server but do not receive reminders, we need to put them in the cache as well.
+    if (!is_final) return;
+    const setCacheResNoReminder = await sendToBackground({
+      action: "setRemindersTextDataIntoCache", 
+      data: Array.from(this.sentSentences).map((sentence) => ({
+        sentence,
+        word: "",                     
+        word_idx: -1,                 
+        related_phrase: "",
+        related_phrase_sentence: "",
+        reminder: "",
+      }))
+    })
+
+    if (setCacheResNoReminder.status === "error"){
+      await sendToBackground({action: "setLogInfo", data: "Error at setRemindersTextDataIntoCacheNoReminder: " + setCacheResNoReminder.error! })
+      return;
+    }
+    await sendToBackground({action: "setLogInfo", data: `Info: The request ${this.requestID} is done. Ready to start a new one.`})
+    
+    this.renewRequestID();
+    this.sentSentences.clear();
+    this.releaseRequestLock();
+  }
+
+  public getShadowContainer(){
+    return this.shadowContainer;
+  }
+
+  public removeShadowRoot(){
+    const shadowHost = document.getElementById("vocab-reminder-shadow-host");
+    if (shadowHost && shadowHost.parentNode) {
+      shadowHost.parentNode.removeChild(shadowHost);
+    }
+  }
+
+  public renewRequestID(){
+    this.requestID++;
   }
 }
 
 
-const handlers: HandlerMap = {};
-
-registerHandler(
-  "getSelectedPhrase",
-  async () => {
-    const {phrase, phraseIdx, sentence} = getSelectedPhraseAndSentence();
-    return {status: "success", data: {phrase: phrase, phrase_idx: phraseIdx, sentence: sentence }};
-  },
-  handlers
-);
-
-registerHandler(
-  "preSelectPhrase",
-  async (textContent) => {
-    const {phrase, phraseIdx, sentence, range} = getSelectedPhraseAndSentence();
-    const shadowContainer = dynamicDOMManager.getShadowContainer()
-    const popoverId = addPopover(textContent, range, shadowContainer)
-    return {status: "success", data: {phrase: phrase, phrase_idx: phraseIdx, sentence: sentence, popoverId: popoverId}};
-  },
-  handlers
-);
-
-registerHandler(
-  "afterSelectPhrase",
-  async ({popoverId, textContent}) => {
-    const shadowContainer = dynamicDOMManager.getShadowContainer()
-    const popover = shadowContainer.querySelector(`#${popoverId}`) as HTMLDivElement;
-    if(!popover) return {status: "error", error: "popover not found"}
-    updatePopoverContent(popover ,textContent)
-    return {status: "success"};
-  },
-  handlers
-);
-
-
-addMessageListener(handlers)
-let dynamicDOMManager = new DynamicDOMManager(document.body);
-let user: User;
-(async () => {
+async function checkAuth(){
   const res = await sendToBackground({action: "getUser"})
-  const web_url = window.location.href; 
   if(res.status === "success"){
-    user = res.data!;
+    const user = res.data!;
     if (!user.llm_response_language || user.learning_languages.length===0 || user.reading_languages.length===0){
       await sendToBackground({action: "setLogInfo", data: `Warning: Please go to ${clientURL}/dashboard/account set up llm response language, learning languages, and reading languages` })
+      return {status: "error"}
     }
-    else if (user.unallowed_urls.includes(web_url)){
-      await sendToBackground({action: "setLogInfo", data: "Warning: Vocab Reminder is not allowed to work on this website."})
+
+    const web_url = window.location.href; 
+    for (const blockedUrl of user.unallowed_urls) {
+      if (web_url.startsWith(blockedUrl)) {
+        await sendToBackground({
+          action: "setLogInfo",
+          data: "Warning: Vocab Reminder is not allowed to work on this website."
+        });
+        return {status: "error"};
+      }
     }
-    else{
-      dynamicDOMManager.start();
-    }  
+
+    return {status: "success", data: user};
   }
   else{
     await sendToBackground({action: "setLogInfo", data: "Error at getUser: " + res.error! })
+    return {status: "error"};
   }
-})();
+}
+
+function setupMessageHandler(dynamicDOMManager: DynamicDOMManager){
+  const handlers: HandlerMap = {};
+
+  registerHandler(
+    "getSelectedPhrase",
+    async () => {
+      const {phrase, phraseIdx, sentence} = getSelectedPhraseAndSentence();
+      return {status: "success", data: {phrase: phrase, phrase_idx: phraseIdx, sentence: sentence }};
+    },
+    handlers
+  );
+
+  registerHandler(
+    "preSelectPhrase",
+    async (textContent) => {
+      const {phrase, phraseIdx, sentence, range} = getSelectedPhraseAndSentence();
+      const shadowContainer = dynamicDOMManager.getShadowContainer()
+      const popoverId = addPopover(textContent, range, shadowContainer)
+      return {status: "success", data: {phrase: phrase, phrase_idx: phraseIdx, sentence: sentence, popoverId: popoverId}};
+    },
+    handlers
+  );
+
+  registerHandler(
+    "afterSelectPhrase",
+    async ({popoverId, textContent}) => {
+      const shadowContainer = dynamicDOMManager.getShadowContainer()
+      const popover = shadowContainer.querySelector(`#${popoverId}`) as HTMLDivElement;
+      if(!popover) return {status: "error", error: "popover not found"}
+      updatePopoverContent(popover ,textContent)
+      return {status: "success"};
+    },
+    handlers
+  );
+
+  registerHandler(
+    "receiveRemindersTextFromServer",
+    async (remindersTextData) => {
+      dynamicDOMManager.showRemindersTextData(remindersTextData);
+      return {status: "success"};
+    },
+    handlers
+  )
+
+  registerHandler(
+    "releaseLock",
+    async () => {
+      dynamicDOMManager.renewRequestID();
+      dynamicDOMManager.releaseRequestLock();
+      return {status: "success"};
+    },
+    handlers
+  )
+
+  const msgListener = addMessageListener(handlers)
+  return msgListener
+}
+
+// avoid "extension context invalidated" error when extension reload, upgrade, install
+function setupOrphanProtection(dynamicDOMManager: DynamicDOMManager){
+  const onMouseMove = (_event: MouseEvent) => {
+    if (unregisterOrphan()) {
+      return;
+    }
+    // Your logic here if needed while still active
+  };
+
+  const unregisterOrphan = () => {
+    if (chrome.runtime.id) {
+      // Still connected to the extension
+      return false;
+    }
+
+    // if this content script is now orphaned
+
+    // remove all listener
+    window.removeEventListener(orphanMessageId, unregisterOrphan);
+    document.removeEventListener('mousemove', onMouseMove);
+    removeMessageListener(msgListener)
+    
+    // clean up
+    dynamicDOMManager.removeShadowRoot()
+    return true;
+  };
+
+
+  const orphanMessageId = chrome.runtime.id + 'orphanCheck';
+
+  window.dispatchEvent(new Event(orphanMessageId));
+  window.addEventListener(orphanMessageId, unregisterOrphan);
+  (window as any).running = true;
+
+  document.addEventListener('mousemove', onMouseMove);
+
+  const msgListener = setupMessageHandler(dynamicDOMManager)
+  
+} 
+
+async function main(){
+  await sendToBackground({
+    action: "deleteLogInfo"
+  });
+
+  await sendToBackground({
+    action: "setLogInfo",
+    data: "Start!!!"
+  });
+  
+
+  const dynamicDOMManager = new DynamicDOMManager(document.body);
+
+  const authRes = await checkAuth();
+  if (authRes.status === "error") return;
+  
+  setupOrphanProtection(dynamicDOMManager)
+  dynamicDOMManager.start();
+}
+
+main()

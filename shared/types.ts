@@ -36,6 +36,8 @@ export type TranslatePhraseResponse = BaseResponse<string>
 //----------------- Reminders Text -----------------
 
 export type RemindersTextRequest = {
+  tab_id: number;
+  request_id: number;
   user_id: string;
   reading_languages: string[];
   llm_response_language: string;
@@ -44,7 +46,8 @@ export type RemindersTextRequest = {
 };
 
 
-export type RemindersTextResponseSentenceData = {
+export type ReminderTextData = {
+  sentence: string;
   word: string;
   word_idx: number;
   related_phrase: string;
@@ -52,15 +55,23 @@ export type RemindersTextResponseSentenceData = {
   reminder: string;
 };
 
-
-export type RemindersTextResponseData = {
-  sentence: string;
-  reminders_data: RemindersTextResponseSentenceData[];
+export type ReminderTextResponseData = {
+  tab_id: number;
+  request_id: number;
+  is_final: boolean;
+  reminders_text_data: ReminderTextData[];
 };
 
+export type RemindersTextResponse = BaseResponse<ReminderTextResponseData>;
 
-export type RemindersTextResponse = BaseResponse<RemindersTextResponseData[]>;
+//----------------- Reminders Text Cache-----------------
+export type RemindersTextDataCache = ReminderTextData[]
 
+export type RemindersTextRequestCache = RemindersTextDataCache
+
+export type RemindersTextResponseCache = {
+  [sentence: string]: RemindersTextDataCache;
+};
 
 //----------------- Auth -----------------
 export type User = {

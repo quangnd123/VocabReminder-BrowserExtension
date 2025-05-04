@@ -1,4 +1,4 @@
-import { User, RemindersTextRequest, RemindersTextResponseData} from "./types";
+import { User, ReminderTextResponseData, RemindersTextRequestCache, RemindersTextResponseCache} from "./types";
 
 interface ActionMap {
   getUser: {
@@ -14,15 +14,26 @@ interface ActionMap {
     };
   }
   getRemindersTextFromServer:{
-    input_type: RemindersTextRequest;
-    output_type: RemindersTextResponseData[];
+    input_type: {
+      request_id: number;
+      user_id: string;
+      reading_languages: string[];
+      llm_response_language: string;
+      learning_languages: string[];
+      sentences: string[];
+    };
+    output_type: void;
   };
+  receiveRemindersTextFromServer:{
+    input_type: ReminderTextResponseData;
+    output_type: void;
+  }
   getRemindersTextDataFromCache:{
     input_type: string[];
-    output_type: (RemindersTextResponseData|null)[];
+    output_type: RemindersTextResponseCache;
   }
   setRemindersTextDataIntoCache:{
-    input_type: RemindersTextResponseData[];
+    input_type: RemindersTextRequestCache;
     output_type: void;
   }
   setLogInfo:{
@@ -32,6 +43,10 @@ interface ActionMap {
   getLogInfo:{
     input_type: number
     output_type: [Date, string][]
+  }
+  deleteLogInfo:{
+    input_type: void
+    output_type: void
   }
   preSelectPhrase:{
     input_type: string // textContent
@@ -47,6 +62,10 @@ interface ActionMap {
       popoverId: string
       textContent: string
     }
+    output_type: void
+  }
+  releaseLock:{
+    input_type: void
     output_type: void
   }
   // Add more actions here...
@@ -72,15 +91,30 @@ export async function sendToBackground<A extends keyof ActionMap>(
   msg: Message<A>
 ): Promise<BaseResponse<ActionMap[A]["output_type"]>> {
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage(msg, (response) => {
-      if (chrome.runtime.lastError) {
+    try {
+      if (!chrome.runtime?.id) {
+        // Context is invalid (extension probably reloaded)
         return resolve({
           status: "error",
-          error: chrome.runtime.lastError.message,
+          error: "Extension context invalidated (runtime.id is undefined)",
         });
       }
-      resolve(response as BaseResponse<ActionMap[A]["output_type"]>);
-    });
+
+      chrome.runtime.sendMessage(msg, (response) => {
+        if (chrome.runtime.lastError) {
+          return resolve({
+            status: "error",
+            error: chrome.runtime.lastError.message,
+          });
+        }
+        resolve(response as BaseResponse<ActionMap[A]["output_type"]>);
+      });
+    } catch (e) {
+      resolve({
+        status: "error",
+        error: (e as Error).message,
+      });
+    }
   });
 }
 
@@ -89,15 +123,30 @@ export async function sendToTab<A extends keyof ActionMap>(
   msg: Message<A>
 ): Promise<BaseResponse<ActionMap[A]["output_type"]>> {
   return new Promise((resolve) => {
-    chrome.tabs.sendMessage(tabId, msg, (response) => {
-      if (chrome.runtime.lastError) {
+    try {
+      if (!chrome.runtime?.id) {
+        // Context is invalid (extension probably reloaded)
         return resolve({
           status: "error",
-          error: chrome.runtime.lastError.message,
+          error: "Extension context invalidated (runtime.id is undefined)",
         });
       }
-      resolve(response as BaseResponse<ActionMap[A]["output_type"]>);
-    });
+      
+      chrome.tabs.sendMessage(tabId, msg, (response) => {
+        if (chrome.runtime.lastError) {
+          return resolve({
+            status: "error",
+            error: chrome.runtime.lastError.message,
+          });
+        }
+        resolve(response as BaseResponse<ActionMap[A]["output_type"]>);
+      });
+    } catch (e) {
+      resolve({
+        status: "error",
+        error: (e as Error).message,
+      });
+    }
   });
 }
 
@@ -114,25 +163,35 @@ export function registerHandler<A extends keyof ActionMap>(
 }
 
 export function addMessageListener(handlers: HandlerMap) {
-  chrome.runtime.onMessage.addListener(
-    (message: Message<keyof ActionMap>, sender, sendResponse) => {
-      const handler = handlers[message.action] as Handler<any>;
-      if (!handler) return;
+  const listener = (
+    message: Message<keyof ActionMap>, 
+    sender: chrome.runtime.MessageSender,
+    sendResponse: (response: any) => void
+  ) => {
+    const handler = handlers[message.action] as Handler<any>;
+    if (!handler) return;
 
-      (async () => {
-        try {
-          const response = await handler(message.data, sender);
-          sendResponse(response);
-        } catch (error) {
-          sendResponse({
-            status: "error",
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      })();
+    (async () => {
+      try {
+        const response = await handler(message.data, sender);
+        sendResponse(response);
+      } catch (error) {
+        sendResponse({
+          status: "error",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
 
-      return true;
-    }
-  );
+    return true;
+  }
+
+  chrome.runtime.onMessage.addListener(listener);
+  return listener;
 }
 
+export function removeMessageListener(
+  listener: Parameters<typeof chrome.runtime.onMessage.addListener>[0]
+) {
+  chrome.runtime.onMessage.removeListener(listener);
+}

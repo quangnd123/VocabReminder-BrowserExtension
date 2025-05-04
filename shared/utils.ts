@@ -12,8 +12,8 @@ function isValidSentence(sentence: string) {
   // Ignore only symbols or emojis
   if (/^[\p{P}\p{S}\p{Emoji}]+$/u.test(sentence)) return false;
 
-  // Ignore excessive emoji or symbol usage (more than 80% of text)
-  if ((sentence.match(/[\p{Emoji}]/gu) || []).length > sentence.length * 0.8) return false;
+  // Ignore excessive emoji or symbol usage (more than 50% of text)
+  if ((sentence.match(/[\p{Emoji}]/gu) || []).length > sentence.length * 0.5) return false;
 
   // Ignore mostly numbers (e.g., "1234567" or "999 888 777")
   if (/^\d+(\s\d+)*$/.test(sentence)) return false;
@@ -147,7 +147,18 @@ function getSelectedPhraseAndSentence() {
   return {phrase: cleanedPhrase, phraseIdx, sentence, range}
 }
 
+function waitForSocketOpen(socket: WebSocket): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (socket.readyState === WebSocket.OPEN) {
+      resolve();
+    } else if (socket.readyState === WebSocket.CONNECTING) {
+      socket.addEventListener("open", () => resolve(), { once: true });
+      socket.addEventListener("error", (err) => reject(err), { once: true });
+    } else {
+      reject(new Error("WebSocket is not in a state to be opened."));
+    }
+  });
+}
 
-
-export {isValidSentence, preprocessText, getSelectedPhraseAndSentence};
+export {isValidSentence, preprocessText, getSelectedPhraseAndSentence, waitForSocketOpen};
 
