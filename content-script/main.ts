@@ -245,12 +245,12 @@ class DynamicDOMManager {
     // track newly added sentences on DOM and show reminders for sentences that are already in cache.
     const currentSentence2TextNodes = this.getSentences();
     const sentencesCount = Object.keys(currentSentence2TextNodes).length
-    await sendToBackground({action: "setLogInfo", data: `Info: Detected ${sentencesCount} sentences. Checking the cache...` })
     if(sentencesCount === 0) return;
+    await sendToBackground({action: "setLogInfo", data: `Info: Detected ${sentencesCount} sentences. Checking the cache...` })
 
     const sentencesWithoutReminders = await this.getRemindersTextFromCache(currentSentence2TextNodes);
-    await sendToBackground({action: "setLogInfo", data: `Info: ${sentencesWithoutReminders.length} sentences will be sent to the server`})
     if (sentencesWithoutReminders.length === 0)return;
+    await sendToBackground({action: "setLogInfo", data: `Info: ${sentencesWithoutReminders.length} sentences will be sent to the server`})
 
     sentencesWithoutReminders.forEach(item => this.trackedSentences.add(item));
 
